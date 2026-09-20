@@ -28,3 +28,4 @@ _book/
 
 /.quarto/
 **/*.quarto_ipynb
+portfolio-book/data/
