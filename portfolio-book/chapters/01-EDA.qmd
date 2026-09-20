@@ -1,6 +1,6 @@
 ---
 title: "Chapter 1 · My EDA project"
-author: "Your Name"
+author: "Florian Escaffre"
 date: today
 ---
 
@@ -42,10 +42,12 @@ use the one that fits your portal:
 #| label: setup
 #| message: false
 # Load what you use. {rdatagouv} only if you're on data.gouv.fr and want it.
-# library(rdatagouv)    # search / download datasets from data.gouv.fr
+library(rdatagouv)    # search / download datasets from data.gouv.fr
 library(janitor)        # clean column names, tabulate with tabyl()
 library(naniar)         # visualise missing values
-library(skimr)          # one-line data summary with skim()
+library(skimr)
+library(dplyr) 
+library(tidyverse)       # one-line data summary with skim()
 ```
 
 ```{r}
@@ -53,10 +55,12 @@ library(skimr)          # one-line data summary with skim()
 #| message: false
 # TODO: replace with the code you wrote in the Session-2 lab.
 # Option A — data.gouv.fr via {rdatagouv}:
-# ds <- get_dataset("my-dataset-slug"); url <- ds$resources$url[1]
+# ds <- rdatagouv::get_dataset("5afbd35fb595086a31734624"); url <- ds$resources$url[1]
 # Option B — any portal by direct URL:
 # url <- "https://www.example-portal.org/.../my-data.csv"
 # download.file(url, "data/my-data.csv")
+
+ds <- readr::read_csv2("/home/ensai/Documents/portfolio-book-fe/portfolio-book/data/eco2mix-regional-cons-def.csv")
 ```
 
 > **Optionally pin the fetched copy** with `{pins}` so the chapter reads from a
@@ -75,13 +79,14 @@ library(skimr)          # one-line data summary with skim()
 #| label: skim
 #| fig-cap: "A one-line summary of the dataset."
 # The skim() output gives you type, missingness and distributions at a glance.
-# skim(dat)
+ds |> 
+  skimr::skim() 
 ```
 
 ```{r}
 #| label: missingness
 #| fig-cap: "Missing values across variables."
-# vis_miss(dat) — where is data missing, and why might that be?
+vis_miss(ds, "warn_large_data" = FALSE) #— where is data missing, and why might that be?
 ```
 
 ## Cleaning decisions {#sec-cleaning}
@@ -90,6 +95,47 @@ library(skimr)          # one-line data summary with skim()
 rename, recode, or drop, and why? A defensible cleaning decision is a feature
 of a good analysis, not an afterthought. -->
 
+```{r}
+# Clean names, drop empty column, fix column type
+ds_clean <- ds |> 
+  janitor::clean_names() |>
+  janitor::remove_empty(which = "cols") |> 
+  mutate(
+    code_insee_region = as.integer(code_insee_region),
+    
+    across(
+      .cols = c(
+        eolien_mw, # Idéalement placé ici maintenant
+        tco_thermique_percent, tch_thermique_percent, 
+        tco_nucleaire_percent, tch_nucleaire_percent, 
+        tco_eolien_percent, tch_eolien_percent, 
+        tco_solaire_percent, tch_solaire_percent, 
+        tco_hydraulique_percent, tch_hydraulique_percent, 
+        tco_bioenergies_percent
+      ),
+      .fns = as.double
+    )
+  )
+
+```
+```{r}
+#| label: skim
+#| fig-cap: "A one-line summary of the cleaned dataset."
+# The skim() output gives you type, missingness and distributions at a glance.
+ds_clean |> 
+  skimr::skim() 
+```
+
+Filtre pour garder seulement les données sur la Bretagne
+```{r}
+#| label: filtre-bretagne
+
+ds_bzh <- ds_clean |> 
+  filter(region == "Bretagne")
+
+ds_bzh |> skimr::skim()
+```
+
 ## Plotting the story
 
 <!-- TODO: replace with your figures. Give every figure a caption and refer to
@@ -97,9 +143,66 @@ it in the text (e.g. "Fig. 1 shows that …"). If a figure uses randomness
 (sampling, jitter, a simulation), fix the seed *inside* that cell with
 `withr::with_seed(2025, { ... })` so the figure is identical on every render. -->
 
+### Analyse de la bretagne
 ```{r}
-#| label: fig-main
-#| fig-cap: "The central figure of your analysis."
+#| label: fig-courbe-temporelle-conso-prod
+#| fig-cap: "Courbe temporelle de la consommation en fonction de la production en bretagne"
+
+ds_bzh |> 
+  select(date_heure, consommation_mw, nucleaire_mw, eolien_mw, solaire_mw, 
+         hydraulique_mw, thermique_mw, bioenergies_mw) |> 
+  pivot_longer(-date_heure, names_to = "filiere", values_to = "mw") |> 
+  ggplot(aes(x = date_heure, y = mw, color = filiere)) +
+  geom_line(alpha = 0.7) +
+  labs(title = "Consommation et production par filière — Bretagne",
+       x = NULL, y = "MW", color = "Filière") +
+  theme_minimal()
+```
+
+```{r}
+#| label: saisonnalite-mensuelle
+
+ds_bzh |> 
+  mutate(mois = lubridate::month(date, label = TRUE)) |> 
+  group_by(mois) |> 
+  summarise(conso_moy = mean(consommation_mw, na.rm = TRUE), .groups = "drop") |> 
+  ggplot(aes(x = mois, y = conso_moy)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Consommation moyenne par mois — Bretagne",
+       x = NULL, y = "Consommation moyenne (MW)") +
+  theme_minimal()
+```
+
+```{r}
+#| label: mix-energetique-bzh
+
+ds_bzh |> 
+  select(date_heure, thermique_mw, eolien_mw, solaire_mw, hydraulique_mw, bioenergies_mw) |> 
+  pivot_longer(-date_heure, names_to = "filiere", values_to = "mw") |> 
+  group_by(filiere) |> 
+  summarise(prod_totale = sum(mw, na.rm = TRUE), .groups = "drop") |> 
+  mutate(part_pct = prod_totale / sum(prod_totale) * 100) |> 
+  ggplot(aes(x = reorder(filiere, part_pct), y = part_pct)) +
+  geom_col(fill = "darkgreen") +
+  coord_flip() +
+  labs(title = "Répartition du mix de production — Bretagne (période complète)",
+       x = NULL, y = "Part (%)") +
+  theme_minimal()
+```
+
+```{r}
+#| label: taux-couverture-bzh
+
+ds_bzh |> 
+  mutate(
+    prod_totale = rowSums(across(c(thermique_mw, eolien_mw, solaire_mw, 
+                                     hydraulique_mw, bioenergies_mw)), na.rm = TRUE),
+    taux_couverture = prod_totale / consommation_mw * 100
+  ) |> 
+  summarise(
+    taux_couverture_moy = mean(taux_couverture, na.rm = TRUE),
+    taux_couverture_median = median(taux_couverture, na.rm = TRUE)
+  )
 ```
 
 ## Findings
