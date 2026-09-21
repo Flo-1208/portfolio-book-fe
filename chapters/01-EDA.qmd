@@ -53,24 +53,8 @@ library(tidyverse)       # one-line data summary with skim()
 ```{r}
 #| label: download
 #| message: false
-# TODO: replace with the code you wrote in the Session-2 lab.
-# Option A — data.gouv.fr via {rdatagouv}:
-# ds <- rdatagouv::get_dataset("5afbd35fb595086a31734624"); url <- ds$resources$url[1]
-
-# Option B — any portal by direct URL:
-url <- "https://www.data.gouv.fr/api/1/datasets/r/4c308634-d76e-40b0-a777-ab99a8871564"
-download.file(url, "data/data_eco2mix_regional.csv")
-
-ds <- readr::read_csv2("https://www.data.gouv.fr/api/1/datasets/r/4c308634-d76e-40b0-a777-ab99a8871564")
-
 board <- pins::board_folder("data/", versioned = TRUE)
-pins::pin_write(ds, "data_eco2mix_regional.csv")
-# outside quarto doc
-```
-
-```{r}
-board <- pins::board_folder("data/", versioned = TRUE)
-ds <- pins::pin_read(board, "data_eco2mix_regional.csv")
+ds <- pins::pin_read(board, "eco2mix_regional")
 ```
 
 ## A first look
@@ -97,6 +81,31 @@ vis_miss(ds, "warn_large_data" = FALSE) #— where is data missing, and why migh
 rename, recode, or drop, and why? A defensible cleaning decision is a feature
 of a good analysis, not an afterthought. -->
 
+```{r}
+#| label: justif-drop-na-consommation
+
+ds |> 
+  janitor::clean_names() |>
+  filter(is.na(consommation_mw)) |> 
+  nrow()
+
+ds |> 
+  janitor::clean_names() |>
+  mutate(rang = row_number()) |> 
+  filter(is.na(consommation_mw)) |> 
+  pull(rang)
+```
+```{r}
+#| label: justif-drop-stockage-batterie
+
+ds |> 
+  janitor::clean_names() |> 
+  summarise(
+    valeurs_uniques_stockage = list(unique(stockage_batterie)),
+    valeurs_uniques_destockage = list(unique(destockage_batterie))
+  )
+```
+
 Vérifier les colonnes relatives au stockage des baterries : seulement des NA et 0
 Décalage de 1h entre les colonnes date, heure et date_heure + missing values in date_heure : decision to trop the column date_heure
 Erreur de détection de types des colonnes (str au lieu de double par exemple)
@@ -107,19 +116,46 @@ Les 12 premières lignes sont les seules avec des NA sur la consommation en MW, 
 ds_clean <- ds |> 
   janitor::clean_names() |>
   janitor::remove_empty(which = "cols") |> 
-  select(-c("stockage_batterie", "destockage_batterie", "date_heure")) |> 
+  select(-c("stockage_batterie", "destockage_batterie")) |> 
   mutate(
     heure = hms::as_hms(heure),
     date = as.Date(date),
+    date_heure = lubridate::ymd_hms(date_heure, tz = "UTC"),
     code_insee_region = as.integer(code_insee_region),
     across(
-      .cols = -c(region, nature, date, heure, code_insee_region),
+      .cols = -c(region, nature, date, heure, date_heure, code_insee_region),
       .fns = as.double
     )
   ) |> 
   tidyr::drop_na("consommation_mw")
 ```
 
+```{r}
+#| label: justif-fuseaux-date-heure
+
+lubridate::tz(ds_clean$date_heure)
+
+ds_clean |> 
+  mutate(
+    heure_num = as.numeric(hms::as_hms(heure)) / 3600,
+    heure_utc_num = lubridate::hour(date_heure) + lubridate::minute(date_heure)/60,
+    diff = (heure_num - heure_utc_num) %% 24
+  ) |> 
+  count(diff)
+```
+```{r}
+ds_clean |> 
+  filter(is.na(date_heure) | is.na(heure)) |> 
+  count(date) |> 
+  arrange(desc(n))
+```
+
+```{r}
+ds_clean |> 
+  filter(is.na(date_heure)) |> 
+  count(heure, region)
+```
+Missing values of date_heure of the hours corresponding to hour change in autumn and summer of each year : drop?
 More than 50% of missing values on the tco and tch columns : need to drop ? / can they be useful ?
 
 
@@ -131,15 +167,7 @@ ds_clean |>
   skimr::skim() 
 ```
 
-Filtre pour garder seulement les données sur la Bretagne
-```{r}
-#| label: filtre-bretagne
 
-ds_bzh <- ds_clean |> 
-  filter(region == "Bretagne")
-
-ds_bzh |> skimr::skim()
-```
 
 ## Plotting the story
 
@@ -148,66 +176,78 @@ it in the text (e.g. "Fig. 1 shows that …"). If a figure uses randomness
 (sampling, jitter, a simulation), fix the seed *inside* that cell with
 `withr::with_seed(2025, { ... })` so the figure is identical on every render. -->
 
-### Analyse de la bretagne
+### Energy mix by region
 ```{r}
-#| label: fig-courbe-temporelle-conso-prod
-#| fig-cap: "Courbe temporelle de la consommation en fonction de la production en bretagne"
+#| label: mix-par-region
 
-ds_bzh |> 
-  select(date_heure, consommation_mw, nucleaire_mw, eolien_mw, solaire_mw, 
-         hydraulique_mw, thermique_mw, bioenergies_mw) |> 
-  pivot_longer(-date_heure, names_to = "filiere", values_to = "mw") |> 
-  ggplot(aes(x = date_heure, y = mw, color = filiere)) +
-  geom_line(alpha = 0.7) +
-  labs(title = "Consommation et production par filière — Bretagne",
-       x = NULL, y = "MW", color = "Filière") +
-  theme_minimal()
-```
-
-```{r}
-#| label: saisonnalite-mensuelle
-
-ds_bzh |> 
-  mutate(mois = lubridate::month(date, label = TRUE)) |> 
-  group_by(mois) |> 
-  summarise(conso_moy = mean(consommation_mw, na.rm = TRUE), .groups = "drop") |> 
-  ggplot(aes(x = mois, y = conso_moy)) +
-  geom_col(fill = "steelblue") +
-  labs(title = "Consommation moyenne par mois — Bretagne",
-       x = NULL, y = "Consommation moyenne (MW)") +
-  theme_minimal()
-```
-
-```{r}
-#| label: mix-energetique-bzh
-
-ds_bzh |> 
-  select(date_heure, thermique_mw, eolien_mw, solaire_mw, hydraulique_mw, bioenergies_mw) |> 
-  pivot_longer(-date_heure, names_to = "filiere", values_to = "mw") |> 
-  group_by(filiere) |> 
-  summarise(prod_totale = sum(mw, na.rm = TRUE), .groups = "drop") |> 
+mix_region <- ds_clean |> 
+  select(region, thermique_mw, nucleaire_mw, eolien_mw, solaire_mw, 
+         hydraulique_mw, bioenergies_mw) |> 
+  pivot_longer(-region, names_to = "filiere", values_to = "mw") |> 
+  group_by(region, filiere) |> 
+  summarise(prod_totale = sum(mw, na.rm = TRUE), .groups = "drop_last") |> 
   mutate(part_pct = prod_totale / sum(prod_totale) * 100) |> 
-  ggplot(aes(x = reorder(filiere, part_pct), y = part_pct)) +
-  geom_col(fill = "darkgreen") +
+  ungroup()
+
+mix_region
+```
+
+```{r}
+#| label: viz-mix-par-region
+
+couleurs_filieres <- c(
+  "nucleaire_mw" = "#F4A300",     # orange (convention RTE/IEA courante)
+  "thermique_mw" = "#8B0000",     # rouge foncé (fossile)
+  "eolien_mw" = "#87CEEB",        # bleu ciel
+  "solaire_mw" = "#FFD700",       # jaune (soleil)
+  "hydraulique_mw" = "#0047AB",   # bleu foncé (eau)
+  "bioenergies_mw" = "#556B2F"    # vert olive
+)
+
+mix_region |> 
+  ggplot(aes(x = region, y = part_pct, fill = filiere)) +
+  geom_col() +
   coord_flip() +
-  labs(title = "Répartition du mix de production — Bretagne (période complète)",
-       x = NULL, y = "Part (%)") +
+  scale_fill_manual(
+    values = couleurs_filieres,
+    labels = c(
+      "nucleaire_mw" = "Nucléaire",
+      "thermique_mw" = "Thermique (fossile)",
+      "eolien_mw" = "Éolien",
+      "solaire_mw" = "Solaire",
+      "hydraulique_mw" = "Hydraulique",
+      "bioenergies_mw" = "Bioénergies"
+    )
+  ) +
+  labs(title = "Répartition du mix de production par région",
+       x = NULL, y = "Part (%)", fill = "Filière") +
   theme_minimal()
 ```
 
 ```{r}
-#| label: taux-couverture-bzh
+#| label: filiere-dominante-par-region
 
-ds_bzh |> 
+profil_region <- mix_region |> 
+  group_by(region) |> 
+  slice_max(part_pct, n = 1) |> 
+  ungroup() |> 
   mutate(
-    prod_totale = rowSums(across(c(thermique_mw, eolien_mw, solaire_mw, 
-                                     hydraulique_mw, bioenergies_mw)), na.rm = TRUE),
-    taux_couverture = prod_totale / consommation_mw * 100
-  ) |> 
-  summarise(
-    taux_couverture_moy = mean(taux_couverture, na.rm = TRUE),
-    taux_couverture_median = median(taux_couverture, na.rm = TRUE)
+    categorie = case_when(
+      filiere == "nucleaire_mw" ~ "Nucléaire",
+      filiere %in% c("eolien_mw", "solaire_mw", "hydraulique_mw", "bioenergies_mw") ~ "Renouvelable",
+      filiere == "thermique_mw" ~ "Fossile",
+      TRUE ~ "Autre"
+    )
   )
+
+profil_region
+```
+
+```{r}
+
+```
+```{r}
+
 ```
 
 ## Findings

@@ -2,4 +2,5 @@
 name = "portfolio-book"
 
 [dependencies]
+sf = "*"
 tidyverse = "*"
