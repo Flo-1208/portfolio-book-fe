@@ -1,8 +1,33 @@
-.Rproj.user
+# R (do not commit machine-local environment state)
 .Rhistory
 .RData
-.httr-oauth
+.Ruserdata
+.Rproj.user
+
+# renv — commit renv.lock but NOT the local library cache
+renv/library/
+renv/staging/
+renv/local/
+renv/python/
+
+# Render output — the book is built from source, so ignore generated HTML
+/docs/
+/book/
+*_files/
+_rsessions/
+
+# Python (if you add Python chapters)
+__pycache__/
+*.pyc
+.venv/
+
+# Editor / OS
 .DS_Store
-.quarto
-portfolio-book/data/
-portfolio-book/pins/
+
+_book/
+
+/.quarto/
+**/*.quarto_ipynb
+data/
+/.uvr/library/
+/.uvr/activate*
