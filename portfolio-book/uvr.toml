@@ -1,0 +1,5 @@
+[project]
+name = "portfolio-book"
+
+[dependencies]
+tidyverse = "*"

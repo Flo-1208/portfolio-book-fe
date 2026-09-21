@@ -29,3 +29,5 @@ _book/
 /.quarto/
 **/*.quarto_ipynb
 portfolio-book/data/
+/.uvr/library/
+/.uvr/activate*
