@@ -70,7 +70,7 @@ ds |>
 ```{r}
 #| label: missingness
 #| fig-cap: "Missing values across variables."
-vis_miss(ds, "warn_large_data" = FALSE) #— where is data missing, and why might that be?
+#vis_miss(ds, "warn_large_data" = FALSE) #— where is data missing, and why might that be?
 
 # datset too big to use vis_miss
 ```
@@ -244,12 +244,122 @@ profil_region
 ```
 
 ```{r}
+#| label: chargement-fond-carte
+#| message: false
 
+library(sf)
+
+regions_geo <- sf::st_read(
+  "https://raw.githubusercontent.com/gregoiredavid/france-geojson/master/regions.geojson",
+  quiet = TRUE
+)
+
+names(regions_geo)
 ```
+```{r}
+#| label: verif-noms-regions
+
+# Vérifier que les noms de région matchent entre les deux sources avant la jointure
+regions_geo |> pull(nom) |> sort()
+profil_region |> pull(region) |> sort()
+```
+
+```{r}
+#| label: viz-carte-filiere-precise
+
+carte_filiere <- regions_geo |> 
+  left_join(
+    mix_region |> group_by(region) |> slice_max(part_pct, n = 1) |> ungroup(),
+    by = c("nom" = "region")
+  )
+
+carte_filiere |> 
+  ggplot(aes(fill = filiere)) +
+  geom_sf(color = "white", linewidth = 0.3) +
+  scale_fill_manual(values = couleurs_filieres, na.value = "grey85") +
+  labs(title = "Filière de production dominante par région (détail)", fill = "Filière") +
+  theme_minimal() +
+  theme(axis.text = element_blank(), axis.ticks = element_blank())
+```
+
+```{r}
+#| label: jointure-carte-mix
+
+carte_profil <- regions_geo |> 
+  filter(nom %in% profil_region$region) |>   # exclut les DOM-TOM absents du dataset éCO2mix
+  left_join(profil_region, by = c("nom" = "region"))
+
+# Vérifier qu'aucune région ne s'est perdue en route
+carte_profil |> filter(is.na(categorie))
+```
+
+```{r}
+#| label: viz-carte-profil-region
+
+carte_profil |> 
+  ggplot(aes(fill = categorie)) +
+  geom_sf(color = "white", linewidth = 0.3) +
+  scale_fill_manual(
+    values = c("Nucléaire" = "#F4A300", "Renouvelable" = "#2E8B57", "Fossile" = "#8B0000")
+  ) +
+  labs(title = "Filière de production dominante par région", fill = "Catégorie") +
+  theme_minimal() +
+  theme(axis.text = element_blank(), axis.ticks = element_blank())
+```
+
+
+
+```{r}
+#| label: taux-couverture-par-region
+
+taux_couverture_region <- ds_clean |> 
+  mutate(
+    prod_totale = rowSums(across(c(thermique_mw, nucleaire_mw, eolien_mw, solaire_mw, 
+                                     hydraulique_mw, bioenergies_mw)), na.rm = TRUE)
+  ) |> 
+  group_by(region) |> 
+  summarise(
+    taux_couverture = sum(prod_totale, na.rm = TRUE) / sum(consommation_mw, na.rm = TRUE) * 100,
+    .groups = "drop"
+  )
+
+taux_couverture_region |> arrange(desc(taux_couverture))
+```
+
+
+```{r}
+#| label: viz-carte-taux-couverture
+
+carte_couverture |> 
+  ggplot(aes(fill = taux_couverture)) +
+  geom_sf(color = "white", linewidth = 0.5) +
+  scale_fill_gradient2(
+    midpoint = 100, 
+    low = "#B22222",      # rouge brique (déficitaire)
+    mid = "#F5DEB3",      # beige clair au lieu de blanc pur (équilibre)
+    high = "#1B5E20",     # vert foncé (excédentaire) 
+    na.value = "grey85"
+  ) +
+  labs(title = "Taux de couverture production/consommation par région (%)",
+       fill = "Taux de\ncouverture") +
+  theme_minimal() +
+  theme(axis.text = element_blank(), axis.ticks = element_blank())
+```
+
+
+
 ```{r}
 
 ```
 
+```{r}
+
+```
+
+
+```{r}
+
+```
 ## Findings
 
 <!-- TODO: what did you learn? This is your discussion: put your findings and
