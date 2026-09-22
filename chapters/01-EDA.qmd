@@ -307,7 +307,7 @@ carte_profil |>
   theme(axis.text = element_blank(), axis.ticks = element_blank())
 ```
 
-
+### Coverage rate by region
 
 ```{r}
 #| label: taux-couverture-par-region
@@ -346,7 +346,157 @@ carte_couverture |>
   theme(axis.text = element_blank(), axis.ticks = element_blank())
 ```
 
+### Saisonality
 
+```{r}
+#| label: ajout-saison
+
+ds_clean <- ds_clean |> 
+  mutate(
+    mois = lubridate::month(date),
+    saison = case_when(
+      mois %in% c(12, 1, 2)  ~ "Hiver",
+      mois %in% c(3, 4, 5)   ~ "Printemps",
+      mois %in% c(6, 7, 8)   ~ "Été",
+      mois %in% c(9, 10, 11) ~ "Automne"
+    ),
+    saison = factor(saison, levels = c("Hiver", "Printemps", "Été", "Automne"))
+  )
+```
+
+```{r}
+#| label: mix-par-saison-national
+
+mix_saison <- ds_clean |> 
+  select(saison, thermique_mw, nucleaire_mw, eolien_mw, solaire_mw, 
+         hydraulique_mw, bioenergies_mw) |> 
+  pivot_longer(-saison, names_to = "filiere", values_to = "mw") |> 
+  group_by(saison, filiere) |> 
+  summarise(prod_totale = sum(mw, na.rm = TRUE), .groups = "drop_last") |> 
+  mutate(part_pct = prod_totale / sum(prod_totale) * 100) |> 
+  ungroup()
+
+mix_saison
+```
+```{r}
+#| label: viz-mix-par-saison
+
+mix_saison |> 
+  ggplot(aes(x = saison, y = part_pct, fill = filiere)) +
+  geom_col() +
+  scale_fill_manual(values = couleurs_filieres, na.value = "grey85") +
+  labs(title = "Répartition du mix de production par saison (national)",
+       x = NULL, y = "Part (%)", fill = "Filière") +
+  theme_minimal()
+```
+```{r}
+#| label: mix-region-saison
+
+mix_region_saison <- ds_clean |> 
+  select(region, saison, thermique_mw, nucleaire_mw, eolien_mw, solaire_mw, 
+         hydraulique_mw, bioenergies_mw) |> 
+  pivot_longer(-c(region, saison), names_to = "filiere", values_to = "mw") |> 
+  group_by(region, saison, filiere) |> 
+  summarise(prod_totale = sum(mw, na.rm = TRUE), .groups = "drop_last") |> 
+  mutate(part_pct = prod_totale / sum(prod_totale) * 100) |> 
+  ungroup()
+
+mix_region_saison
+```
+```{r}
+#| label: filiere-dominante-region-saison
+
+profil_region_saison <- mix_region_saison |> 
+  group_by(region, saison) |> 
+  slice_max(part_pct, n = 1) |> 
+  ungroup()
+
+profil_region_saison
+```
+
+```{r}
+#| label: viz-heatmap-region-saison
+
+profil_region_saison |> 
+  ggplot(aes(x = saison, y = region, fill = filiere)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_manual(values = couleurs_filieres, na.value = "grey85") +
+  labs(title = "Filière dominante par région et par saison",
+       x = NULL, y = NULL, fill = "Filière") +
+  theme_minimal()
+```
+```{r}
+#| label: viz-barres-empilees-region-saison
+
+mix_region_saison |> 
+  ggplot(aes(x = saison, y = part_pct, fill = filiere)) +
+  geom_col() +
+  facet_wrap(~region) +
+  scale_fill_manual(values = couleurs_filieres, na.value = "grey85") +
+  labs(title = "Mix de production par région et par saison",
+       x = NULL, y = "Part (%)", fill = "Filière") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Mensual production
+```{r}
+#| label: prod-mensuelle-nationale-corrigee
+
+prod_mensuelle <- ds_clean |> 
+  mutate(mois_annee = floor_date(date, "month")) |> 
+  select(mois_annee, date_heure, thermique_mw, nucleaire_mw, eolien_mw, solaire_mw, 
+         hydraulique_mw, bioenergies_mw) |> 
+  pivot_longer(-c(mois_annee, date_heure), names_to = "filiere", values_to = "mw") |> 
+  group_by(mois_annee, date_heure, filiere) |> 
+  summarise(prod_nationale_instant = sum(mw, na.rm = TRUE), .groups = "drop_last") |> 
+  group_by(mois_annee, filiere) |> 
+  summarise(prod_moyenne_mw = mean(prod_nationale_instant, na.rm = TRUE), .groups = "drop")
+
+prod_mensuelle
+```
+
+```{r}
+#| label: ordre-filieres
+
+ordre_filieres <- c("thermique_mw", "nucleaire_mw", "hydraulique_mw", 
+                     "eolien_mw", "solaire_mw", "bioenergies_mw")
+
+prod_mensuelle <- prod_mensuelle |> 
+  mutate(filiere = factor(filiere, levels = ordre_filieres))
+```
+
+```{r}
+#| label: viz-aires-empilees-absolu
+
+prod_mensuelle |> 
+  ggplot(aes(x = mois_annee, y = prod_moyenne_mw, fill = filiere)) +
+  geom_area() +
+  scale_fill_manual(values = couleurs_filieres, na.value = "grey85") +
+  labs(title = "Évolution du mix de production national (valeurs absolues)",
+       x = NULL, y = "Production moyenne (MW)", fill = "Filière") +
+  theme_minimal() +
+  guides(fill = guide_legend(reverse = TRUE))
+```
+
+```{r}
+#| label: viz-aires-empilees-pourcentage
+
+prod_mensuelle |> 
+  group_by(mois_annee) |> 
+  mutate(part_pct = prod_moyenne_mw / sum(prod_moyenne_mw, na.rm = TRUE) * 100) |> 
+  ungroup() |> 
+  ggplot(aes(x = mois_annee, y = part_pct, fill = filiere)) +
+  geom_area() +
+  scale_fill_manual(values = couleurs_filieres, na.value = "grey85") +
+  labs(title = "Évolution du mix de production national (en % du total)",
+       x = NULL, y = "Part (%)", fill = "Filière") +
+  theme_minimal()
+```
+
+```{r}
+
+```
 
 ```{r}
 
@@ -356,6 +506,13 @@ carte_couverture |>
 
 ```
 
+```{r}
+
+```
+
+```{r}
+
+```
 
 ```{r}
 
